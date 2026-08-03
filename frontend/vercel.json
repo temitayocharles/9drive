@@ -1,0 +1,11 @@
+{
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/((?!assets/|favicon\\.svg|icons\\.svg|maskable-icon\\.svg|pwa-192x192\\.svg|pwa-512x512\\.svg).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

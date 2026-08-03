@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: 9drive-api-temitayo
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npm run start:deploy
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DATABASE_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: TOKEN_ENCRYPTION_KEY
+        generateValue: true
+      - key: ACCESS_TOKEN_TTL_SECONDS
+        value: 3600
+      - key: REFRESH_TOKEN_TTL_DAYS
+        value: 30
+      - key: MAX_UPLOAD_BYTES
+        value: 5368709120
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: RECAPTCHA_SECRET_KEY
+        sync: false
