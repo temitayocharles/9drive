@@ -1,0 +1,1 @@
+Trigger Vercel rebuild after correcting VITE_API_URL to the live Render backend.
