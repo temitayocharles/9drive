@@ -39,6 +39,11 @@ function safeFileName(name: string) {
   return name.replace(/[\\/]+/g, '-').replace(/[\u0000-\u001f\u007f]+/g, '').slice(0, 180) || 'file'
 }
 
+function remainingQuotaBytes(quotaBytes: bigint | null, usedBytes: bigint) {
+  if (quotaBytes === null) return null
+  return quotaBytes > usedBytes ? quotaBytes - usedBytes : 0n
+}
+
 export function buildS3ObjectKey(config: Pick<S3Config, 'prefix'>, userId: string, fileId: string, fileName: string) {
   return `${config.prefix.replace(/^\/+|\/+$/g, '')}/${userId}/${fileId}/${safeFileName(fileName)}`
 }
@@ -74,13 +79,13 @@ export async function syncS3Quota(accountId: string) {
       connectedAccountId: accountId,
       totalBytes: config.quotaBytes,
       usedBytes,
-      availableBytes: config.quotaBytes === null ? null : config.quotaBytes - usedBytes,
+      availableBytes: remainingQuotaBytes(config.quotaBytes, usedBytes),
       lastSyncedAt: new Date(),
     },
     update: {
       totalBytes: config.quotaBytes,
       usedBytes,
-      availableBytes: config.quotaBytes === null ? null : config.quotaBytes - usedBytes,
+      availableBytes: remainingQuotaBytes(config.quotaBytes, usedBytes),
       lastSyncedAt: new Date(),
     },
   })

@@ -20,11 +20,19 @@ function logUpload(message: string, metadata?: Record<string, unknown>) {
   console.info('[upload]', message, metadata ?? '')
 }
 
-function syncQuotaInBackground(accountId: string, sessionId: string) {
-  logUpload('quota sync started', { accountId, sessionId })
-  syncGoogleQuota(accountId)
-    .then(() => logUpload('quota sync completed', { accountId, sessionId }))
-    .catch((error) => logUpload('quota sync failed', { accountId, sessionId, message: error instanceof Error ? error.message : 'Unknown error' }))
+function syncQuotaInBackground(account: { id: string; provider: string }, sessionId: string) {
+  logUpload('quota sync started', { accountId: account.id, sessionId })
+  const sync = account.provider === 's3' ? syncS3Quota(account.id) : syncGoogleQuota(account.id)
+  sync
+    .then(async () => {
+      await prisma.connectedAccount.update({ where: { id: account.id }, data: { lastError: null } }).catch(() => undefined)
+      logUpload('quota sync completed', { accountId: account.id, sessionId })
+    })
+    .catch(async (error) => {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      await prisma.connectedAccount.update({ where: { id: account.id }, data: { lastError: message } }).catch(() => undefined)
+      logUpload('quota sync failed', { accountId: account.id, sessionId, message })
+    })
 }
 
 function normalizePriorityAccountIds(value: unknown) {
@@ -57,6 +65,7 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
       } else {
         await syncGoogleQuota(account.id)
       }
+      await prisma.connectedAccount.update({ where: { id: account.id }, data: { lastError: null } }).catch(() => undefined)
     } catch (err: any) {
       console.error(`[upload] failed to sync quota for account ${account.email} (${account.id}):`, err.message || err)
       await prisma.connectedAccount.update({
@@ -95,13 +104,15 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
     return selected
   }
 
-  return eligible
-    .sort((a, b) => {
-      if (a.availableBytes === null && b.availableBytes === null) return a.account.provider === 's3' ? -1 : 1
-      if (a.availableBytes === null) return a.account.provider === 's3' ? -1 : 1
-      if (b.availableBytes === null) return b.account.provider === 's3' ? 1 : -1
-      return Number(b.availableBytes - a.availableBytes)
-    })[0]?.account
+  const knownEligible = eligible.filter(({ availableBytes }) => availableBytes !== null)
+  if (knownEligible.length > 0) {
+    return knownEligible
+      .sort((a, b) => Number((b.availableBytes ?? 0n) - (a.availableBytes ?? 0n)))[0]?.account ?? null
+  }
+
+  // Provider-managed S3 capacity is intentionally unknown. Use it as a fallback in
+  // most-available mode instead of pretending it has more space than measured providers.
+  return byPriority(eligible, priorityAccountIds)[0]?.account ?? null
 }
 
 export async function handleUpload(req: AuthRequest, res: Response, next: NextFunction) {
@@ -253,8 +264,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
           completed.push({ ...file, sizeBytes: file.sizeBytes.toString() })
         }
         await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'completed', completedAt: new Date() } })
-        if (account.provider === 's3') syncS3Quota(account.id).catch(() => undefined)
-        else syncQuotaInBackground(account.id, session.id)
+        syncQuotaInBackground(account, session.id)
       } catch (error) {
         fileStream.resume()
         logUpload('file upload failed', { fileName, message: error instanceof Error ? error.message : 'Upload failed' })
@@ -531,7 +541,7 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
 
       await createAuditLog(req.user!.id, 'UPLOAD_FILE', 'file', existingFile.id, { name: existingFile.name, size: existingFile.sizeBytes.toString() })
 
-      syncQuotaInBackground(account.id, session.id)
+      syncQuotaInBackground(account, session.id)
 
       return res.status(201).json({ status: 'completed', file: { ...existingFile, sizeBytes: existingFile.sizeBytes.toString() } })
     }

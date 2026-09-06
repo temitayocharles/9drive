@@ -48,7 +48,9 @@ const menu = [
 type StorageSummary = {
   totalBytes: string
   usedBytes: string
+  knownUsedBytes?: string
   availableBytes: string
+  providerManagedUsedBytes?: string
   providerManagedAccounts?: number
 }
 
@@ -109,9 +111,9 @@ function SystemInfoDropdown({ storage }: { storage: any }) {
 }
 
 function Sidebar({ onNavigate, user, storage, breakdown, onLogout }: { onNavigate?: () => void; user: AuthUser | null; storage: StorageSummary | null; breakdown: StorageBreakdown; onLogout: () => void }) {
-  const used = Number(storage?.usedBytes ?? 0)
+  const knownUsed = Number(storage?.knownUsedBytes ?? storage?.usedBytes ?? 0)
   const total = Number(storage?.totalBytes ?? 0)
-  const progress = total > 0 ? Math.min(100, (used / total) * 100) : 0
+  const progress = total > 0 ? Math.min(100, (knownUsed / total) * 100) : 0
   const [profileImageUrl, setProfileImageUrl] = useState('')
   const [avatarError, setAvatarError] = useState(false)
   const items = [
@@ -177,12 +179,13 @@ function Sidebar({ onNavigate, user, storage, breakdown, onLogout }: { onNavigat
           ))}
         </div>
         <div className="flex justify-between text-sm font-bold text-slate-700">
-          <span>{formatBytes(storage?.usedBytes)} used</span>
+          <span>{formatBytes(storage?.usedBytes)} used overall</span>
           <span className="text-slate-400">{formatBytes(storage?.totalBytes)} known total</span>
         </div>
         <div className="my-2 h-1.5 rounded-full bg-slate-200/60 overflow-hidden">
           <div className="h-full rounded-full bg-blue-600 transition-all duration-300" style={{ width: `${progress}%` }} />
         </div>
+        {storage?.providerManagedAccounts ? <p className="text-[10px] leading-4 text-slate-400">Known-capacity bar excludes {formatBytes(storage.providerManagedUsedBytes)} used in provider-managed storage.</p> : null}
         <Button variant="danger" size="sm" className="mt-3 w-full justify-start h-10 px-3 text-[13px] font-bold" onClick={onLogout}>
           <LogOut className="h-4 w-4" />Log Out
         </Button>

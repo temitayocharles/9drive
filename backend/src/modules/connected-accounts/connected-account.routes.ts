@@ -22,9 +22,20 @@ const s3ConnectSchema = z.object({
   quotaBytes: z.string().regex(/^\d+$/).optional().nullable(),
 })
 
+const s3QuotaUpdateSchema = z.object({
+  quotaBytes: z.string().regex(/^\d+$/).nullable(),
+})
+
 async function syncQuotaForAccount(account: { id: string; provider: string }) {
-  if (account.provider === 's3') return syncS3Quota(account.id)
-  return syncGoogleQuota(account.id)
+  try {
+    const quota = account.provider === 's3' ? await syncS3Quota(account.id) : await syncGoogleQuota(account.id)
+    await prisma.connectedAccount.update({ where: { id: account.id }, data: { lastError: null } }).catch(() => undefined)
+    return quota
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Quota sync failed'
+    await prisma.connectedAccount.update({ where: { id: account.id }, data: { lastError: message } }).catch(() => undefined)
+    throw error
+  }
 }
 
 connectedAccountRouter.get('/', requireAuth, async (req: AuthRequest, res, next) => {
@@ -140,7 +151,7 @@ connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, ne
     })
     try {
       await testS3Connection(config)
-      const quota = await syncS3Quota(account.id)
+      const quota = await syncQuotaForAccount(account)
       return res.status(201).json({
         account: {
           ...account,
@@ -151,6 +162,55 @@ connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, ne
       if (!existingAccount) await prisma.connectedAccount.delete({ where: { id: account.id } }).catch(() => undefined)
       throw error
     }
+  } catch (error) {
+    return next(error)
+  }
+})
+
+connectedAccountRouter.patch('/:id/s3-quota', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const accountId = String(req.params.id)
+    const body = s3QuotaUpdateSchema.parse(req.body)
+    const account = await prisma.connectedAccount.findFirstOrThrow({
+      where: { id: accountId, userId: req.user!.id, provider: 's3', status: 'connected' },
+    })
+    const config = await prisma.s3StorageConfig.update({
+      where: { connectedAccountId: account.id },
+      data: { quotaBytes: body.quotaBytes === null ? null : BigInt(body.quotaBytes) },
+    })
+
+    const current = await prisma.storageAccount.findUnique({ where: { connectedAccountId: account.id } })
+    const usedBytes = current?.usedBytes ?? 0n
+    const availableBytes = config.quotaBytes === null ? null : (config.quotaBytes > usedBytes ? config.quotaBytes - usedBytes : 0n)
+    let quota = await prisma.storageAccount.upsert({
+      where: { connectedAccountId: account.id },
+      create: {
+        connectedAccountId: account.id,
+        totalBytes: config.quotaBytes,
+        usedBytes,
+        availableBytes,
+        lastSyncedAt: current?.lastSyncedAt ?? null,
+      },
+      update: { totalBytes: config.quotaBytes, availableBytes },
+    })
+
+    let warning: string | null = null
+    try {
+      quota = await syncQuotaForAccount(account)
+    } catch (error) {
+      warning = `Tracking limit saved, but provider sync failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+    }
+
+    return res.json({
+      quota: {
+        ...quota,
+        totalBytes: quota.totalBytes?.toString() ?? null,
+        usedBytes: quota.usedBytes.toString(),
+        availableBytes: quota.availableBytes?.toString() ?? null,
+        trashBytes: quota.trashBytes?.toString() ?? null,
+      },
+      warning,
+    })
   } catch (error) {
     return next(error)
   }

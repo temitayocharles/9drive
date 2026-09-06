@@ -33,17 +33,26 @@ storageRouter.get('/summary', async (req: AuthRequest, res, next) => {
     const accounts = await prisma.connectedAccount.findMany({ where: { userId: req.user!.id, status: 'connected' }, include: { storageAccount: true } })
     const summary = accounts.reduce((acc, account) => {
       const storage = account.storageAccount
-      acc.totalBytes += storage?.totalBytes ?? 0n
-      acc.usedBytes += storage?.usedBytes ?? 0n
-      acc.availableBytes += storage?.availableBytes ?? 0n
-      if (storage?.totalBytes === null || storage?.totalBytes === undefined) acc.providerManagedAccounts += 1
+      const usedBytes = storage?.usedBytes ?? 0n
+      acc.usedBytes += usedBytes
+
+      if (storage?.totalBytes !== null && storage?.totalBytes !== undefined) {
+        acc.totalBytes += storage.totalBytes
+        acc.knownUsedBytes += usedBytes
+        acc.availableBytes += storage.availableBytes ?? 0n
+      } else if (account.provider === 's3') {
+        acc.providerManagedAccounts += 1
+        acc.providerManagedUsedBytes += usedBytes
+      }
       return acc
-    }, { totalBytes: 0n, usedBytes: 0n, availableBytes: 0n, providerManagedAccounts: 0 })
+    }, { totalBytes: 0n, usedBytes: 0n, knownUsedBytes: 0n, availableBytes: 0n, providerManagedUsedBytes: 0n, providerManagedAccounts: 0 })
 
     return res.json({
       totalBytes: summary.totalBytes.toString(),
       usedBytes: summary.usedBytes.toString(),
+      knownUsedBytes: summary.knownUsedBytes.toString(),
       availableBytes: summary.availableBytes.toString(),
+      providerManagedUsedBytes: summary.providerManagedUsedBytes.toString(),
       providerManagedAccounts: summary.providerManagedAccounts,
       accounts: accounts.map((account) => ({
         id: account.id,
