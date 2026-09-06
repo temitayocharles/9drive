@@ -63,11 +63,17 @@ async function main() {
   console.log(`Google Drive config ready: ${config.id}`)
 }
 
+const seedWatchdog = setTimeout(() => {
+  console.warn('Google Drive config seed exceeded 30 seconds; continuing startup with the existing persisted provider configuration.')
+  process.exit(0)
+}, 30_000)
+
 main()
   .catch((error) => {
     console.error(error)
     process.exit(1)
   })
   .finally(async () => {
+    clearTimeout(seedWatchdog)
     await prisma.$disconnect()
   })
