@@ -40,7 +40,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
     // 1. Initialize or get status
     if (!sessionId) {
-      const initData = await apiFetch<{ sessionId: string; provider: string }>('/uploads/resumable/init', {
+      const initData = await apiFetch<{ sessionId?: string; provider: string; targetAccountId?: string; directUpload?: boolean }>('/uploads/resumable/init', {
         method: 'POST',
         body: JSON.stringify({
           fileName: file.name,
@@ -50,7 +50,30 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           targetAccountId: targetAccountId || undefined
         })
       })
-      sessionId = initData.sessionId
+      if (initData.directUpload || initData.provider !== 'google_drive') {
+        const form = new FormData()
+        form.append('sizeBytes', String(file.size))
+        form.append('fileName', file.name)
+        form.append('mimeType', file.type || 'application/octet-stream')
+        if (folderId) form.append('folderId', folderId)
+        if (initData.targetAccountId) form.append('targetAccountId', initData.targetAccountId)
+        form.append('file', file, file.name)
+
+        const response = await fetch(`${API_URL}/uploads`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${getAccessToken()}` },
+          body: form
+        })
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null) as { message?: string } | null
+          throw new Error(payload?.message || 'Direct upload failed')
+        }
+        onProgress(100)
+        return
+      }
+
+      sessionId = initData.sessionId || ''
+      if (!sessionId) throw new Error('Upload session was not created')
       // Update session with the active sessionId
       setResumableSessions(prev => ({
         ...prev,
