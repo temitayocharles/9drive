@@ -16,12 +16,12 @@ function providerLabel(provider: string) {
 }
 
 function storageLimitLabel(account: ConnectedAccount) {
-  if (account.provider === 's3' && account.storageAccount?.totalBytes === null) return 'Unlimited'
+  if (account.provider === 's3' && account.storageAccount?.totalBytes === null) return 'Provider-managed'
   return formatBytes(account.storageAccount?.totalBytes)
 }
 
 function availableLabel(account: ConnectedAccount) {
-  if (account.provider === 's3' && account.storageAccount?.availableBytes === null) return 'Unlimited'
+  if (account.provider === 's3' && account.storageAccount?.availableBytes === null) return 'Provider-managed'
   return formatBytes(account.storageAccount?.availableBytes)
 }
 

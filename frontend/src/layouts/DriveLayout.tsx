@@ -49,6 +49,7 @@ type StorageSummary = {
   totalBytes: string
   usedBytes: string
   availableBytes: string
+  providerManagedAccounts?: number
 }
 
 type StorageBreakdown = {
@@ -117,7 +118,7 @@ function Sidebar({ onNavigate, user, storage, breakdown, onLogout }: { onNavigat
     ['Photo', formatBytes(breakdown.photo), 'bg-lime-500'],
     ['Video', formatBytes(breakdown.video), 'bg-yellow-400'],
     ['Document', formatBytes(breakdown.document), 'bg-cyan-400'],
-    ['Free Storage', formatBytes(storage?.availableBytes), 'bg-orange-500'],
+    ['Known Free', formatBytes(storage?.availableBytes), 'bg-orange-500'],
   ]
 
   useEffect(() => {
@@ -177,7 +178,7 @@ function Sidebar({ onNavigate, user, storage, breakdown, onLogout }: { onNavigat
         </div>
         <div className="flex justify-between text-sm font-bold text-slate-700">
           <span>{formatBytes(storage?.usedBytes)} used</span>
-          <span className="text-slate-400">{formatBytes(storage?.totalBytes)}</span>
+          <span className="text-slate-400">{formatBytes(storage?.totalBytes)} known total</span>
         </div>
         <div className="my-2 h-1.5 rounded-full bg-slate-200/60 overflow-hidden">
           <div className="h-full rounded-full bg-blue-600 transition-all duration-300" style={{ width: `${progress}%` }} />
