@@ -15,7 +15,7 @@ const captchaLoadError = 'Captcha could not load. If you block Google scripts, a
 declare global {
   interface Window {
     grecaptcha?: {
-      render: (element: HTMLElement, options: { sitekey: string; callback: (token: string) => void; 'expired-callback': () => void }) => number
+      render?: (element: HTMLElement, options: { sitekey: string; callback: (token: string) => void; 'expired-callback': () => void }) => number
       reset: (widgetId?: number) => void
     }
   }
@@ -41,8 +41,12 @@ export function RegisterPage() {
     }
 
     const scriptId = 'google-recaptcha-script'
+    let retryTimer: number | undefined
+    let attempts = 0
+
     const renderCaptcha = () => {
-      if (!recaptchaRef.current || !window.grecaptcha || recaptchaWidgetId.current !== null) return
+      if (recaptchaWidgetId.current !== null) return true
+      if (!recaptchaRef.current || typeof window.grecaptcha?.render !== 'function') return false
       try {
         recaptchaWidgetId.current = window.grecaptcha.render(recaptchaRef.current, {
           sitekey: recaptchaSiteKey,
@@ -52,9 +56,21 @@ export function RegisterPage() {
           },
           'expired-callback': () => setCaptchaToken(''),
         })
+        setCaptchaError('')
+        return true
       } catch {
-        setCaptchaError(captchaLoadError)
+        return false
       }
+    }
+
+    const tryRender = () => {
+      if (renderCaptcha()) return
+      attempts += 1
+      if (attempts >= 100) {
+        setCaptchaError(captchaLoadError)
+        return
+      }
+      retryTimer = window.setTimeout(tryRender, 100)
     }
 
     let script = document.getElementById(scriptId) as HTMLScriptElement | null
@@ -64,18 +80,16 @@ export function RegisterPage() {
       script.src = 'https://www.google.com/recaptcha/api.js?render=explicit'
       script.async = true
       script.defer = true
-      script.onload = renderCaptcha
+      script.onload = tryRender
       script.onerror = () => setCaptchaError(captchaLoadError)
       document.body.appendChild(script)
     } else {
-      renderCaptcha()
+      tryRender()
     }
 
-    const timer = window.setTimeout(() => {
-      if (recaptchaWidgetId.current === null) setCaptchaError(captchaLoadError)
-    }, 10_000)
-
-    return () => window.clearTimeout(timer)
+    return () => {
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+    }
   }, [])
 
   async function continueWithGoogle() {
