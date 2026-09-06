@@ -4,11 +4,11 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { PageHeader } from '@/components/drive/PageHeader'
-import { apiFetch, formatBytes, API_URL } from '@/lib/api'
+import { apiFetch, formatBytes, formatDate, API_URL } from '@/lib/api'
 import { getGravatarUrl } from '@/lib/gravatar'
 import { getStoredUser, getAccessToken, clearAuthSession } from '@/lib/auth'
 
-type ConnectedAccount = { id: string; provider: string; email: string; displayName?: string | null; status: string; storageAccount?: { totalBytes: string | null; usedBytes: string; availableBytes: string | null; lastSyncedAt: string | null } | null }
+type ConnectedAccount = { id: string; provider: string; email: string; displayName?: string | null; status: string; lastError?: string | null; storageAccount?: { totalBytes: string | null; usedBytes: string; availableBytes: string | null; lastSyncedAt: string | null } | null }
 
 function providerLabel(provider: string) {
   if (provider === 's3') return 'S3 Storage'
@@ -25,6 +25,23 @@ function availableLabel(account: ConnectedAccount) {
   return formatBytes(account.storageAccount?.availableBytes)
 }
 
+const GB_BYTES = 1024 ** 3
+
+function gbToBytes(value: string) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error('Storage limit must be zero or a positive number of GB.')
+  const bytes = parsed * GB_BYTES
+  if (!Number.isSafeInteger(Math.round(bytes))) throw new Error('Storage limit is too large to represent safely.')
+  return Math.round(bytes).toString()
+}
+
+function bytesToGb(value: string | null | undefined) {
+  if (value === null || value === undefined) return ''
+  const gb = Number(value) / GB_BYTES
+  if (!Number.isFinite(gb)) return ''
+  return Number.isInteger(gb) ? String(gb) : gb.toFixed(2).replace(/\.?0+$/, '')
+}
+
 export function SettingsPage() {
   const user = getStoredUser()
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
@@ -32,8 +49,10 @@ export function SettingsPage() {
   const [connecting, setConnecting] = useState(false)
   const [s3Open, setS3Open] = useState(false)
   const [connectingS3, setConnectingS3] = useState(false)
-  const [s3Form, setS3Form] = useState({ name: '', bucket: '', region: 'us-east-1', endpoint: '', accessKeyId: '', secretAccessKey: '', forcePathStyle: false, quotaBytes: '' })
+  const [s3Form, setS3Form] = useState({ name: '', bucket: '', region: 'us-east-1', endpoint: '', accessKeyId: '', secretAccessKey: '', forcePathStyle: false, quotaGb: '' })
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null)
+  const [s3LimitGb, setS3LimitGb] = useState('')
+  const [savingS3Limit, setSavingS3Limit] = useState(false)
   const [disconnectingAccountId, setDisconnectingAccountId] = useState<string | null>(null)
   const [accountToDisconnect, setAccountToDisconnect] = useState<ConnectedAccount | null>(null)
   const [profileImageUrl, setProfileImageUrl] = useState('')
@@ -272,6 +291,14 @@ export function SettingsPage() {
   }, [accounts, selectedAccountId])
 
   useEffect(() => {
+    if (selectedAccount?.provider !== 's3') {
+      setS3LimitGb('')
+      return
+    }
+    setS3LimitGb(bytesToGb(selectedAccount.storageAccount?.totalBytes))
+  }, [selectedAccount?.id, selectedAccount?.provider, selectedAccount?.storageAccount?.totalBytes])
+
+  useEffect(() => {
     function onMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin || event.data?.type !== 'GOOGLE_CONNECTED') return
       setMessage(event.data.status === 'success' ? 'Google Drive connected.' : 'Google Drive connection failed.')
@@ -327,7 +354,7 @@ export function SettingsPage() {
       await load()
       window.dispatchEvent(new Event('9drive:storage-changed'))
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Failed to disconnect Google Drive account')
+      setMessage(error instanceof Error ? error.message : 'Failed to disconnect storage account')
     } finally {
       setDisconnectingAccountId(null)
     }
@@ -338,9 +365,10 @@ export function SettingsPage() {
     setConnectingS3(true)
     setMessage('')
     try {
-      await apiFetch('/connected-accounts/s3', { method: 'POST', body: JSON.stringify({ ...s3Form, endpoint: s3Form.endpoint || undefined, quotaBytes: s3Form.quotaBytes || null }) })
+      const { quotaGb, ...connection } = s3Form
+      await apiFetch('/connected-accounts/s3', { method: 'POST', body: JSON.stringify({ ...connection, endpoint: connection.endpoint || undefined, quotaBytes: quotaGb.trim() ? gbToBytes(quotaGb) : null }) })
       setS3Open(false)
-      setS3Form({ name: '', bucket: '', region: 'us-east-1', endpoint: '', accessKeyId: '', secretAccessKey: '', forcePathStyle: false, quotaBytes: '' })
+      setS3Form({ name: '', bucket: '', region: 'us-east-1', endpoint: '', accessKeyId: '', secretAccessKey: '', forcePathStyle: false, quotaGb: '' })
       setMessage('S3 storage connected.')
       await load()
       window.dispatchEvent(new Event('9drive:storage-changed'))
@@ -348,6 +376,26 @@ export function SettingsPage() {
       setMessage(error instanceof Error ? error.message : 'Failed to connect S3 storage')
     } finally {
       setConnectingS3(false)
+    }
+  }
+
+  async function saveS3Limit(providerManaged = false) {
+    if (!selectedAccount || selectedAccount.provider !== 's3') return
+    setSavingS3Limit(true)
+    setMessage('')
+    try {
+      const quotaBytes = providerManaged || !s3LimitGb.trim() ? null : gbToBytes(s3LimitGb)
+      const result = await apiFetch<{ warning?: string | null }>(`/connected-accounts/${selectedAccount.id}/s3-quota`, {
+        method: 'PATCH',
+        body: JSON.stringify({ quotaBytes }),
+      })
+      setMessage(result.warning || (quotaBytes === null ? 'S3 capacity is now provider-managed.' : 'S3 tracking limit updated.'))
+      await load()
+      window.dispatchEvent(new Event('9drive:storage-changed'))
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to update S3 tracking limit')
+    } finally {
+      setSavingS3Limit(false)
     }
   }
 
@@ -402,14 +450,23 @@ export function SettingsPage() {
                 <label className="grid gap-1.5 text-xs font-semibold text-slate-500">Choose Account<select className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm focus:outline-none" value={selectedAccount?.id ?? ''} onChange={(event) => setSelectedAccountId(event.target.value)}>{accounts.map((account) => <option key={account.id} value={account.id}>{providerLabel(account.provider)} - {account.displayName || account.email} ({account.status})</option>)}</select></label>
                 {selectedAccount ? <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0"><p className="break-all font-semibold text-sm">{selectedAccount.displayName || selectedAccount.email}</p><p className="text-xs text-slate-500 mt-0.5">{providerLabel(selectedAccount.provider)} · {selectedAccount.status}</p></div>
+                    <div className="min-w-0"><p className="break-all font-semibold text-sm">{selectedAccount.displayName || selectedAccount.email}</p><p className="text-xs text-slate-500 mt-0.5">{providerLabel(selectedAccount.provider)} · {selectedAccount.status}</p><p className="mt-1 text-[11px] text-slate-400">Last synced {selectedAccount.storageAccount?.lastSyncedAt ? formatDate(selectedAccount.storageAccount.lastSyncedAt) : 'never'}</p></div>
                     <div className="grid grid-cols-2 gap-2 sm:flex"><Button className="w-full" size="sm" variant="outline" onClick={() => sync(selectedAccount.id)} disabled={syncingAccountId === selectedAccount.id}><RefreshCw className={syncingAccountId === selectedAccount.id ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />{syncingAccountId === selectedAccount.id ? 'Syncing...' : 'Sync'}</Button><Button className="w-full" size="sm" variant="danger" onClick={() => setAccountToDisconnect(selectedAccount)}><Trash2 className="h-4 w-4" />Disconnect</Button></div>
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
                     <div className="rounded-xl bg-white dark:bg-slate-950 p-2 border border-slate-100 dark:border-slate-800"><p className="font-extrabold text-slate-950">{formatBytes(selectedAccount.storageAccount?.usedBytes)}</p><p className="mt-0.5 text-[10px] text-slate-500">Used</p></div>
-                    <div className="rounded-xl bg-white dark:bg-slate-950 p-2 border border-slate-100 dark:border-slate-800"><p className="font-extrabold text-slate-950">{storageLimitLabel(selectedAccount)}</p><p className="mt-0.5 text-[10px] text-slate-500">Total</p></div>
-                    <div className="rounded-xl bg-white dark:bg-slate-950 p-2 border border-slate-100 dark:border-slate-800"><p className="font-extrabold text-slate-950">{availableLabel(selectedAccount)}</p><p className="mt-0.5 text-[10px] text-slate-500">Free</p></div>
+                    <div className="rounded-xl bg-white dark:bg-slate-950 p-2 border border-slate-100 dark:border-slate-800"><p className="font-extrabold text-slate-950">{storageLimitLabel(selectedAccount)}</p><p className="mt-0.5 text-[10px] text-slate-500">Tracked limit</p></div>
+                    <div className="rounded-xl bg-white dark:bg-slate-950 p-2 border border-slate-100 dark:border-slate-800"><p className="font-extrabold text-slate-950">{availableLabel(selectedAccount)}</p><p className="mt-0.5 text-[10px] text-slate-500">Tracked free</p></div>
                   </div>
+                  {selectedAccount.lastError ? <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">Storage health warning: {selectedAccount.lastError}</p> : null}
+                  {selectedAccount.provider === 's3' ? <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/70 p-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <label className="grid flex-1 gap-1 text-xs font-semibold text-slate-600">Tracking limit (GB)<input className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm" inputMode="decimal" placeholder="Leave blank for provider-managed" value={s3LimitGb} onChange={(event) => setS3LimitGb(event.target.value)} /></label>
+                      <Button size="sm" onClick={() => saveS3Limit(false)} disabled={savingS3Limit}>{savingS3Limit ? 'Saving...' : 'Save limit'}</Button>
+                      <Button size="sm" variant="outline" onClick={() => { setS3LimitGb(''); saveS3Limit(true) }} disabled={savingS3Limit}>Provider-managed</Button>
+                    </div>
+                    <p className="mt-2 text-[11px] leading-4 text-slate-500">A tracking limit is a 9Drive routing guard, not a provider-side quota. Provider-managed accounts remain usable, but Most available routing uses them only when no known-capacity account can fit the upload.</p>
+                  </div> : null}
                 </div> : null}
               </>}
             </div>
@@ -617,7 +674,8 @@ export function SettingsPage() {
           <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Endpoint URL (optional)" value={s3Form.endpoint} onChange={(event) => setS3Form({ ...s3Form, endpoint: event.target.value })} />
           <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Access key ID" value={s3Form.accessKeyId} onChange={(event) => setS3Form({ ...s3Form, accessKeyId: event.target.value })} required />
           <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Secret access key" type="password" value={s3Form.secretAccessKey} onChange={(event) => setS3Form({ ...s3Form, secretAccessKey: event.target.value })} required />
-          <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Quota bytes (optional)" inputMode="numeric" value={s3Form.quotaBytes} onChange={(event) => setS3Form({ ...s3Form, quotaBytes: event.target.value })} />
+          <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Tracking limit in GB (optional)" inputMode="decimal" value={s3Form.quotaGb} onChange={(event) => setS3Form({ ...s3Form, quotaGb: event.target.value })} />
+          <p className="-mt-2 text-xs text-slate-500">Leave blank for provider-managed capacity. You can change this later without reconnecting the bucket.</p>
           <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={s3Form.forcePathStyle} onChange={(event) => setS3Form({ ...s3Form, forcePathStyle: event.target.checked })} />Force path style</label>
           <div className="grid gap-3 sm:flex sm:justify-end"><Button variant="outline" type="button" onClick={() => setS3Open(false)} disabled={connectingS3}>Cancel</Button><Button type="submit" disabled={connectingS3}>{connectingS3 ? 'Connecting...' : 'Connect S3'}</Button></div>
         </form>

@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle, Cloud, Database, Filter, Gauge, Link2, RefreshCw } from 'lucide-react'
+import { CheckCircle, Cloud, Database, Gauge, Link2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { PageHeader } from '@/components/drive/PageHeader'
-import { apiFetch, formatBytes } from '@/lib/api'
+import { apiFetch, formatBytes, formatDate } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-type StorageSummary = { totalBytes: string; usedBytes: string; availableBytes: string; providerManagedAccounts?: number }
-type ConnectedAccount = { id: string; email: string; displayName?: string | null; provider: string; status: string; storageAccount?: { totalBytes: string | null; usedBytes: string; availableBytes: string | null; lastSyncedAt: string | null } | null }
+type StorageSummary = { totalBytes: string; usedBytes: string; knownUsedBytes?: string; availableBytes: string; providerManagedUsedBytes?: string; providerManagedAccounts?: number }
+type ConnectedAccount = { id: string; email: string; displayName?: string | null; provider: string; status: string; lastError?: string | null; storageAccount?: { totalBytes: string | null; usedBytes: string; availableBytes: string | null; lastSyncedAt: string | null } | null }
 type RoutingMode = 'most_available' | 'round_robin' | 'priority'
 type RoutingPolicy = { mode: RoutingMode; priorityAccountIds: string[]; roundRobinCursor: number }
 
@@ -152,23 +152,22 @@ export function QuotaTrackerPage() {
 
       <div className="mt-8 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
         <Card className="p-5"><p className="text-sm text-slate-500">Known Total</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.totalBytes)}</p></Card>
-        <Card className="p-5"><p className="text-sm text-slate-500">Used Storage</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.usedBytes)}</p></Card>
+        <Card className="p-5"><p className="text-sm text-slate-500">Known Used</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.knownUsedBytes ?? summary?.usedBytes)}</p></Card>
         <Card className="p-5"><p className="text-sm text-slate-500">Known Available</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.availableBytes)}</p></Card>
         <Card className="p-5"><p className="text-sm text-slate-500">Accounts</p><p className="mt-2 text-2xl font-extrabold">{accounts.length}</p></Card>
       </div>
-      {summary?.providerManagedAccounts ? <p className="mt-3 text-sm text-slate-500">{summary.providerManagedAccounts} provider-managed storage account{summary.providerManagedAccounts === 1 ? '' : 's'} excluded from known capacity totals.</p> : null}
+      {summary?.providerManagedAccounts ? <p className="mt-3 text-sm text-slate-500">{summary.providerManagedAccounts} provider-managed storage account{summary.providerManagedAccounts === 1 ? '' : 's'} excluded from known capacity totals, currently using {formatBytes(summary.providerManagedUsedBytes)}. All-provider usage is {formatBytes(summary.usedBytes)}.</p> : null}
 
       <div className="mt-8 flex flex-wrap items-center gap-3">
-        <Button variant="outline"><Filter className="h-4 w-4" />All Providers</Button>
-        <Button variant="outline">All Accounts</Button>
-        <Button variant="soft"><Gauge className="h-4 w-4" />Most available</Button>
+        <div className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700"><Gauge className="h-4 w-4" />Routing: {routingPolicy.mode === 'most_available' ? 'Most available' : routingPolicy.mode === 'round_robin' ? 'Round robin' : 'Priority order'}</div>
+        <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">{accounts.filter((account) => account.status === 'connected').length} active storage account{accounts.filter((account) => account.status === 'connected').length === 1 ? '' : 's'}</div>
       </div>
 
       <Card className="mt-6 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-lg font-extrabold">Upload Routing</h2>
-            <p className="mt-1 text-sm text-slate-500">Choose how new uploads pick connected storage accounts.</p>
+            <p className="mt-1 text-sm text-slate-500">Choose how new uploads pick connected storage accounts. Most available prefers measured free space and falls back to provider-managed S3 only when no known-capacity account can fit. Priority and round robin follow their configured order, so set a tracking limit when you need strict fit checks for S3.</p>
           </div>
           <label className="grid gap-2 text-sm font-semibold lg:w-64">Routing mode<select className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm" value={routingPolicy.mode} onChange={(event) => saveRoutingPolicy({ ...routingPolicy, mode: event.target.value as RoutingMode }).catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to update routing policy'))}><option value="most_available">Most available</option><option value="round_robin">Round robin</option><option value="priority">Priority order</option></select></label>
         </div>
@@ -176,7 +175,7 @@ export function QuotaTrackerPage() {
           {orderedAccounts().map((account, index) => <div key={account.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600"><ProviderIcon provider={account.provider} /></div>
-              <div><p className="font-semibold">{account.displayName || account.email}</p><p className="text-sm text-slate-500">{providerLabel(account.provider)} · {formatBytes(account.storageAccount?.usedBytes)} used · {availableLabel(account)} free</p></div>
+              <div><p className="font-semibold">{account.displayName || account.email}</p><p className="text-sm text-slate-500">{providerLabel(account.provider)} · {formatBytes(account.storageAccount?.usedBytes)} used · {account.storageAccount?.availableBytes === null ? 'provider-managed capacity' : `${availableLabel(account)} free`}</p><p className="text-xs text-slate-400">Last synced {account.storageAccount?.lastSyncedAt ? formatDate(account.storageAccount.lastSyncedAt) : 'never'}{account.lastError ? ' · attention needed' : ''}</p></div>
             </div>
             <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => moveAccount(account.id, -1)} disabled={index === 0}>Up</Button><Button variant="outline" size="sm" onClick={() => moveAccount(account.id, 1)} disabled={index === accounts.length - 1}>Down</Button></div>
           </div>)}
@@ -193,8 +192,9 @@ export function QuotaTrackerPage() {
             <Button className="mt-5" onClick={connectDrive}><Link2 className="h-4 w-4" />Connect Drive</Button>
           </Card>
         ) : accounts.map((account) => {
-          const percent = pct(account)
-          const color = statusColor(percent)
+          const hasKnownLimit = account.storageAccount?.totalBytes !== null && account.storageAccount?.totalBytes !== undefined
+          const percent = hasKnownLimit ? pct(account) : null
+          const color = statusColor(percent ?? 0)
           return (
             <Card key={account.id} className="overflow-hidden p-5">
               <div className="flex items-start justify-between gap-4">
@@ -205,12 +205,16 @@ export function QuotaTrackerPage() {
                 <div className="flex gap-2"><Button variant="outline" size="icon" onClick={() => sync(account.id)} disabled={syncingAccountId === account.id}><RefreshCw className={syncingAccountId === account.id ? 'h-5 w-5 animate-spin' : 'h-5 w-5'} /></Button></div>
               </div>
               <div className="mt-6">
-                <div className="mb-2 flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2 font-semibold"><span className={cn('h-3 w-3 rounded-full', color.split(' ')[0])} />storage</span>
-                  <span className="font-bold">{percent}%</span>
-                </div>
-                <div className="h-2 rounded-full bg-slate-100"><div className={cn('h-full rounded-full', color.split(' ')[0])} style={{ width: `${percent}%` }} /></div>
-                <div className="mt-3 flex items-center justify-between text-sm text-slate-500"><span>{formatBytes(account.storageAccount?.usedBytes)} / {storageLimitLabel(account)}</span><span>Available {availableLabel(account)}</span></div>
+                {hasKnownLimit ? <>
+                  <div className="mb-2 flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-2 font-semibold"><span className={cn('h-3 w-3 rounded-full', color.split(' ')[0])} />storage</span>
+                    <span className="font-bold">{percent}%</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-slate-100"><div className={cn('h-full rounded-full', color.split(' ')[0])} style={{ width: `${percent}%` }} /></div>
+                </> : <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">Capacity managed by provider</div>}
+                <div className="mt-3 flex items-center justify-between text-sm text-slate-500"><span>{formatBytes(account.storageAccount?.usedBytes)} / {storageLimitLabel(account)}</span><span>{account.storageAccount?.availableBytes === null ? 'Provider-managed' : `Available ${availableLabel(account)}`}</span></div>
+                {account.provider === 's3' && !hasKnownLimit ? <p className="mt-3 text-xs text-slate-500">Set a tracking limit in Settings for strict capacity-aware routing.</p> : null}
+                {account.lastError ? <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">Storage health warning: {account.lastError}</p> : null}
               </div>
             </Card>
           )
