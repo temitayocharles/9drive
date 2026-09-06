@@ -6,7 +6,7 @@ import { PageHeader } from '@/components/drive/PageHeader'
 import { apiFetch, formatBytes } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-type StorageSummary = { totalBytes: string; usedBytes: string; availableBytes: string }
+type StorageSummary = { totalBytes: string; usedBytes: string; availableBytes: string; providerManagedAccounts?: number }
 type ConnectedAccount = { id: string; email: string; displayName?: string | null; provider: string; status: string; storageAccount?: { totalBytes: string | null; usedBytes: string; availableBytes: string | null; lastSyncedAt: string | null } | null }
 type RoutingMode = 'most_available' | 'round_robin' | 'priority'
 type RoutingPolicy = { mode: RoutingMode; priorityAccountIds: string[]; roundRobinCursor: number }
@@ -22,12 +22,12 @@ function ProviderIcon({ provider }: { provider: string }) {
 }
 
 function storageLimitLabel(account: ConnectedAccount) {
-  if (account.provider === 's3' && account.storageAccount?.totalBytes === null) return 'Unlimited'
+  if (account.provider === 's3' && account.storageAccount?.totalBytes === null) return 'Provider-managed'
   return formatBytes(account.storageAccount?.totalBytes)
 }
 
 function availableLabel(account: ConnectedAccount) {
-  if (account.provider === 's3' && account.storageAccount?.availableBytes === null) return 'Unlimited'
+  if (account.provider === 's3' && account.storageAccount?.availableBytes === null) return 'Provider-managed'
   return formatBytes(account.storageAccount?.availableBytes)
 }
 
@@ -151,11 +151,12 @@ export function QuotaTrackerPage() {
       {message ? <p className="mt-5 rounded-xl bg-blue-50 p-3 text-sm text-blue-700">{message}</p> : null}
 
       <div className="mt-8 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
-        <Card className="p-5"><p className="text-sm text-slate-500">Total Storage</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.totalBytes)}</p></Card>
+        <Card className="p-5"><p className="text-sm text-slate-500">Known Total</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.totalBytes)}</p></Card>
         <Card className="p-5"><p className="text-sm text-slate-500">Used Storage</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.usedBytes)}</p></Card>
-        <Card className="p-5"><p className="text-sm text-slate-500">Available</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.availableBytes)}</p></Card>
+        <Card className="p-5"><p className="text-sm text-slate-500">Known Available</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.availableBytes)}</p></Card>
         <Card className="p-5"><p className="text-sm text-slate-500">Accounts</p><p className="mt-2 text-2xl font-extrabold">{accounts.length}</p></Card>
       </div>
+      {summary?.providerManagedAccounts ? <p className="mt-3 text-sm text-slate-500">{summary.providerManagedAccounts} provider-managed storage account{summary.providerManagedAccounts === 1 ? '' : 's'} excluded from known capacity totals.</p> : null}
 
       <div className="mt-8 flex flex-wrap items-center gap-3">
         <Button variant="outline"><Filter className="h-4 w-4" />All Providers</Button>

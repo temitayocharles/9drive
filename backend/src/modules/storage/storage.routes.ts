@@ -36,13 +36,15 @@ storageRouter.get('/summary', async (req: AuthRequest, res, next) => {
       acc.totalBytes += storage?.totalBytes ?? 0n
       acc.usedBytes += storage?.usedBytes ?? 0n
       acc.availableBytes += storage?.availableBytes ?? 0n
+      if (storage?.totalBytes === null || storage?.totalBytes === undefined) acc.providerManagedAccounts += 1
       return acc
-    }, { totalBytes: 0n, usedBytes: 0n, availableBytes: 0n })
+    }, { totalBytes: 0n, usedBytes: 0n, availableBytes: 0n, providerManagedAccounts: 0 })
 
     return res.json({
       totalBytes: summary.totalBytes.toString(),
       usedBytes: summary.usedBytes.toString(),
       availableBytes: summary.availableBytes.toString(),
+      providerManagedAccounts: summary.providerManagedAccounts,
       accounts: accounts.map((account) => ({
         id: account.id,
         provider: account.provider,
