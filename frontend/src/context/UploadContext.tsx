@@ -201,7 +201,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             files: nextFiles
           }
         })
-      }, session.sessionId, session.targetAccountId)
+      }, undefined, session.targetAccountId)
 
       window.dispatchEvent(new Event('9drive:storage-changed'))
       window.dispatchEvent(new Event('9drive:upload-completed'))
