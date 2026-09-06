@@ -10,11 +10,12 @@ import { setAuthSession, type AuthUser } from '@/lib/auth'
 
 type AuthResponse = { accessToken: string; refreshToken: string; user: AuthUser }
 const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY?.trim()
+const captchaLoadError = 'Captcha could not load. If you block Google scripts, allow them for this site and try again.'
 
 declare global {
   interface Window {
     grecaptcha?: {
-      render: (element: HTMLElement, options: { sitekey: string; callback: (token: string) => void; 'expired-callback': () => void }) => number
+      render?: (element: HTMLElement, options: { sitekey: string; callback: (token: string) => void; 'expired-callback': () => void }) => number
       reset: (widgetId?: number) => void
     }
   }
@@ -26,6 +27,7 @@ export function RegisterPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [captchaToken, setCaptchaToken] = useState('')
+  const [captchaError, setCaptchaError] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
@@ -33,38 +35,79 @@ export function RegisterPage() {
   const recaptchaWidgetId = useRef<number | null>(null)
 
   useEffect(() => {
-    if (!recaptchaSiteKey) return
-    const scriptId = 'google-recaptcha-script'
-    const renderCaptcha = () => {
-      if (!recaptchaRef.current || !window.grecaptcha || recaptchaWidgetId.current !== null) return
-      recaptchaWidgetId.current = window.grecaptcha.render(recaptchaRef.current, {
-        sitekey: recaptchaSiteKey,
-        callback: setCaptchaToken,
-        'expired-callback': () => setCaptchaToken(''),
-      })
+    if (!recaptchaSiteKey) {
+      setCaptchaError('Registration captcha is not configured. Please try again later.')
+      return
     }
 
-    if (!document.getElementById(scriptId)) {
-      const script = document.createElement('script')
+    const scriptId = 'google-recaptcha-script'
+    let retryTimer: number | undefined
+    let attempts = 0
+
+    const renderCaptcha = () => {
+      if (recaptchaWidgetId.current !== null) return true
+      if (!recaptchaRef.current || typeof window.grecaptcha?.render !== 'function') return false
+      try {
+        recaptchaWidgetId.current = window.grecaptcha.render(recaptchaRef.current, {
+          sitekey: recaptchaSiteKey,
+          callback: (token) => {
+            setCaptchaToken(token)
+            setCaptchaError('')
+          },
+          'expired-callback': () => setCaptchaToken(''),
+        })
+        setCaptchaError('')
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    const tryRender = () => {
+      if (renderCaptcha()) return
+      attempts += 1
+      if (attempts >= 100) {
+        setCaptchaError(captchaLoadError)
+        return
+      }
+      retryTimer = window.setTimeout(tryRender, 100)
+    }
+
+    let script = document.getElementById(scriptId) as HTMLScriptElement | null
+    if (!script) {
+      script = document.createElement('script')
       script.id = scriptId
       script.src = 'https://www.google.com/recaptcha/api.js?render=explicit'
       script.async = true
       script.defer = true
-      script.onload = renderCaptcha
+      script.onload = tryRender
+      script.onerror = () => setCaptchaError(captchaLoadError)
       document.body.appendChild(script)
     } else {
-      renderCaptcha()
+      tryRender()
+    }
+
+    return () => {
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
     }
   }, [])
 
   async function continueWithGoogle() {
     setGoogleLoading(true)
     setError('')
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 30_000)
     try {
-      const data = await apiFetch<{ url: string }>('/auth/google/url', { skipAuth: true })
-      window.location.href = data.url
+      const data = await apiFetch<{ url: string }>('/auth/google/url', { skipAuth: true, signal: controller.signal })
+      window.location.assign(data.url)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Google register failed')
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError('Google sign-in took too long to start. Please try again.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Google register failed')
+      }
+    } finally {
+      window.clearTimeout(timeout)
       setGoogleLoading(false)
     }
   }
@@ -73,6 +116,11 @@ export function RegisterPage() {
     event.preventDefault()
     setLoading(true)
     setError('')
+    if (captchaError) {
+      setError(captchaError)
+      setLoading(false)
+      return
+    }
     if (recaptchaSiteKey && !captchaToken) {
       setError('Please complete the captcha.')
       setLoading(false)
@@ -102,9 +150,10 @@ export function RegisterPage() {
           <label className="grid gap-2 text-sm font-semibold">Name<Input value={name} onChange={(e) => setName(e.target.value)} required /></label>
           <label className="grid gap-2 text-sm font-semibold">Email<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
           <label className="grid gap-2 text-sm font-semibold">Password<Input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-          {recaptchaSiteKey ? <div className="min-h-[78px] overflow-hidden rounded-xl bg-slate-50 p-2"><div ref={recaptchaRef} /></div> : null}
-          {error ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-600">{error}</p> : null}
-          <Button disabled={loading}>{loading ? 'Creating...' : 'Create Account'}</Button>
+          <div className="min-h-[78px] overflow-hidden rounded-xl bg-slate-50 p-2"><div ref={recaptchaRef} /></div>
+          {captchaError ? <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800" role="alert">{captchaError}</p> : null}
+          {error ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-600" role="alert">{error}</p> : null}
+          <Button disabled={loading || Boolean(captchaError)}>{loading ? 'Creating...' : 'Create Account'}</Button>
         </form>
         <div className="mt-4 grid gap-3">
           <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-wide text-slate-400"><span className="h-px flex-1 bg-slate-200" />or<span className="h-px flex-1 bg-slate-200" /></div>

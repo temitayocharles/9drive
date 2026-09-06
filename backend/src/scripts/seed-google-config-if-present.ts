@@ -21,28 +21,46 @@ async function main() {
   const hasClientSecret = isConfigured(clientSecret, ['your-google-client-secret', 'your-client-secret'])
 
   if (!hasClientId || !hasClientSecret) {
-    console.warn('Skipping Google Drive config seed: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET not configured. Set them in .env and run docker compose up -d --build.')
+    console.warn('Skipping Google Drive config seed: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET not configured.')
     return
   }
 
-  await prisma.providerConfig.updateMany({
+  const activeConfigs = await prisma.providerConfig.findMany({
     where: { userId: null, provider: 'google_drive', status: 'active' },
-    data: { status: 'disabled' },
+    orderBy: { createdAt: 'desc' },
   })
 
-  const config = await prisma.providerConfig.create({
-    data: {
-      userId: null,
-      provider: 'google_drive',
-      clientIdEncrypted: encryptText(clientId!),
-      clientSecretEncrypted: encryptText(clientSecret!),
-      redirectUri,
-      scopes,
-      status: 'active',
-    },
-  })
+  const encrypted = {
+    clientIdEncrypted: encryptText(clientId!),
+    clientSecretEncrypted: encryptText(clientSecret!),
+    redirectUri,
+    scopes,
+    status: 'active',
+  }
 
-  console.log(`Seeded global Google Drive config: ${config.id}`)
+  const config = activeConfigs[0]
+    ? await prisma.providerConfig.update({ where: { id: activeConfigs[0].id }, data: encrypted })
+    : await prisma.providerConfig.create({
+        data: {
+          userId: null,
+          provider: 'google_drive',
+          ...encrypted,
+        },
+      })
+
+  if (activeConfigs.length > 1) {
+    await prisma.providerConfig.updateMany({
+      where: {
+        userId: null,
+        provider: 'google_drive',
+        status: 'active',
+        id: { not: config.id },
+      },
+      data: { status: 'disabled' },
+    })
+  }
+
+  console.log(`Google Drive config ready: ${config.id}`)
 }
 
 main()

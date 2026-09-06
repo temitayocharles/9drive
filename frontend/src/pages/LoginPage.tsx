@@ -21,11 +21,19 @@ export function LoginPage() {
   async function continueWithGoogle() {
     setGoogleLoading(true)
     setError('')
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 30_000)
     try {
-      const data = await apiFetch<{ url: string }>('/auth/google/url', { skipAuth: true })
-      window.location.href = data.url
+      const data = await apiFetch<{ url: string }>('/auth/google/url', { skipAuth: true, signal: controller.signal })
+      window.location.assign(data.url)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Google login failed')
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError('Google sign-in took too long to start. Please try again.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Google login failed')
+      }
+    } finally {
+      window.clearTimeout(timeout)
       setGoogleLoading(false)
     }
   }
@@ -55,7 +63,7 @@ export function LoginPage() {
         <form onSubmit={submit} className="mt-6 grid gap-4">
           <label className="grid gap-2 text-sm font-semibold">Email<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
           <label className="grid gap-2 text-sm font-semibold">Password<Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-          {error ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-600">{error}</p> : null}
+          {error ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-600" role="alert">{error}</p> : null}
           <Button disabled={loading}>{loading ? 'Logging in...' : 'Login'}</Button>
         </form>
         <div className="mt-4 grid gap-3">
