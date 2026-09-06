@@ -9,13 +9,23 @@ import { apiFetch } from '@/lib/api'
 import { setAuthSession, type AuthUser } from '@/lib/auth'
 
 type AuthResponse = { accessToken: string; refreshToken: string; user: AuthUser }
+type CaptchaWaiter = { resolve: (token: string) => void; reject: (error: Error) => void; timer: number }
+
 const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY?.trim()
 const captchaLoadError = 'Captcha could not load. If you block Google scripts, allow them for this site and try again.'
 
 declare global {
   interface Window {
     grecaptcha?: {
-      render?: (element: HTMLElement, options: { sitekey: string; callback: (token: string) => void; 'expired-callback': () => void }) => number
+      render?: (element: HTMLElement, options: {
+        sitekey: string
+        size: 'invisible'
+        badge: 'bottomright'
+        callback: (token: string) => void
+        'expired-callback': () => void
+        'error-callback': () => void
+      }) => number
+      execute?: (widgetId?: number) => Promise<string> | void
       reset: (widgetId?: number) => void
     }
   }
@@ -33,6 +43,30 @@ export function RegisterPage() {
   const [googleLoading, setGoogleLoading] = useState(false)
   const recaptchaRef = useRef<HTMLDivElement | null>(null)
   const recaptchaWidgetId = useRef<number | null>(null)
+  const captchaWaiterRef = useRef<CaptchaWaiter | null>(null)
+
+  function resolveCaptcha(token: string) {
+    setCaptchaToken(token)
+    setCaptchaError('')
+    const waiter = captchaWaiterRef.current
+    if (waiter) {
+      window.clearTimeout(waiter.timer)
+      captchaWaiterRef.current = null
+      waiter.resolve(token)
+    }
+  }
+
+  function rejectCaptcha(message: string) {
+    const captchaFailure = new Error(message)
+    setCaptchaToken('')
+    setCaptchaError(message)
+    const waiter = captchaWaiterRef.current
+    if (waiter) {
+      window.clearTimeout(waiter.timer)
+      captchaWaiterRef.current = null
+      waiter.reject(captchaFailure)
+    }
+  }
 
   useEffect(() => {
     if (!recaptchaSiteKey) {
@@ -50,11 +84,11 @@ export function RegisterPage() {
       try {
         recaptchaWidgetId.current = window.grecaptcha.render(recaptchaRef.current, {
           sitekey: recaptchaSiteKey,
-          callback: (token) => {
-            setCaptchaToken(token)
-            setCaptchaError('')
-          },
+          size: 'invisible',
+          badge: 'bottomright',
+          callback: resolveCaptcha,
           'expired-callback': () => setCaptchaToken(''),
+          'error-callback': () => rejectCaptcha(captchaLoadError),
         })
         setCaptchaError('')
         return true
@@ -89,8 +123,42 @@ export function RegisterPage() {
 
     return () => {
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      if (captchaWaiterRef.current) {
+        window.clearTimeout(captchaWaiterRef.current.timer)
+        captchaWaiterRef.current = null
+      }
     }
   }, [])
+
+  async function getCaptchaToken() {
+    if (captchaToken) return captchaToken
+    const widgetId = recaptchaWidgetId.current
+    if (widgetId === null || typeof window.grecaptcha?.execute !== 'function') {
+      throw new Error('Captcha is still loading. Please wait a moment and try again.')
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        if (captchaWaiterRef.current?.timer !== timer) return
+        captchaWaiterRef.current = null
+        reject(new Error(captchaLoadError))
+      }, 30_000)
+      captchaWaiterRef.current = { resolve, reject, timer }
+
+      try {
+        const result = window.grecaptcha!.execute!(widgetId)
+        if (result && typeof result.then === 'function') {
+          result.then((token) => {
+            if (token && captchaWaiterRef.current?.timer === timer) resolveCaptcha(token)
+          }).catch(() => {
+            if (captchaWaiterRef.current?.timer === timer) rejectCaptcha(captchaLoadError)
+          })
+        }
+      } catch {
+        rejectCaptcha(captchaLoadError)
+      }
+    })
+  }
 
   async function continueWithGoogle() {
     setGoogleLoading(true)
@@ -121,13 +189,14 @@ export function RegisterPage() {
       setLoading(false)
       return
     }
-    if (recaptchaSiteKey && !captchaToken) {
-      setError('Please complete the captcha.')
-      setLoading(false)
-      return
-    }
+
     try {
-      const data = await apiFetch<AuthResponse>('/auth/register', { method: 'POST', skipAuth: true, body: JSON.stringify({ name, email, password, captchaToken }) })
+      const token = recaptchaSiteKey ? await getCaptchaToken() : ''
+      const data = await apiFetch<AuthResponse>('/auth/register', {
+        method: 'POST',
+        skipAuth: true,
+        body: JSON.stringify({ name, email, password, captchaToken: token }),
+      })
       setAuthSession(data.accessToken, data.refreshToken, data.user)
       navigate('/all-files')
     } catch (err) {
@@ -150,7 +219,7 @@ export function RegisterPage() {
           <label className="grid gap-2 text-sm font-semibold">Name<Input value={name} onChange={(e) => setName(e.target.value)} required /></label>
           <label className="grid gap-2 text-sm font-semibold">Email<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
           <label className="grid gap-2 text-sm font-semibold">Password<Input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-          <div className="min-h-[78px] overflow-hidden rounded-xl bg-slate-50 p-2"><div ref={recaptchaRef} /></div>
+          <div ref={recaptchaRef} />
           {captchaError ? <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800" role="alert">{captchaError}</p> : null}
           {error ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-600" role="alert">{error}</p> : null}
           <Button disabled={loading || Boolean(captchaError)}>{loading ? 'Creating...' : 'Create Account'}</Button>
