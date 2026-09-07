@@ -44,5 +44,8 @@
     "@types/node": "^25.9.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.2"
   }
 }
